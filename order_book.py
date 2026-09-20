@@ -41,3 +41,26 @@ class OrderQueue:
             self.queue.popleft()
         else:
             print("The operation couldn't be completed, there are no orders left to evict")
+
+class OrderBook:
+    #Initiate the OrderBook object
+    def __init__(self):
+        self.bids = {}
+        self.asks = {}
+    #For debugging, make it printable
+    def __repr__(self):
+        return f'OrderBook Object:\nCurrent bids = {self.bids}\nCurrent asks = {self.asks}'
+
+    def add_order(self, order):
+        if order.side == "buy":
+            if order.price not in self.bids:
+                self.bids[order.price] = OrderQueue(order.price)
+                self.bids[order.price].ingest_order(order)
+            else:
+                self.bids[order.price].ingest_order(order)
+        elif order.side == "sell":
+            if order.price not in self.asks:
+                self.asks[order.price] = OrderQueue(order.price)
+                self.asks[order.price].ingest_order(order)
+            else:
+                self.asks[order.price].ingest_order(order)
