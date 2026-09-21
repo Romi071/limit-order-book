@@ -1,4 +1,5 @@
 from collections import deque
+import heapq
 import uuid
 
 class Order:
@@ -47,20 +48,37 @@ class OrderBook:
     def __init__(self):
         self.bids = {}
         self.asks = {}
+        self.buys_heap = []
+        self.sells_heap = []
     #For debugging, make it printable
     def __repr__(self):
         return f'OrderBook Object:\nCurrent bids = {self.bids}\nCurrent asks = {self.asks}'
 
     def add_order(self, order):
         if order.side == "buy":
-            if order.price not in self.bids:
-                self.bids[order.price] = OrderQueue(order.price)
-                self.bids[order.price].ingest_order(order)
+            if len(self.sells_heap) > 0 and order.price >= self.sells_heap[0]: 
+                best_sell_price = self.sells_heap[0]
+                self.asks[best_sell_price].evict_order()
+                if self.asks[best_sell_price].volume == 0:
+                    heapq.heappop(self.sells_heap)
             else:
-                self.bids[order.price].ingest_order(order)
+                if order.price not in self.bids:
+                    self.bids[order.price] = OrderQueue(order.price)
+                    self.bids[order.price].ingest_order(order)
+                    heapq.heappush(self.buys_heap, -order.price)
+                else:
+                    self.bids[order.price].ingest_order(order)
+
         elif order.side == "sell":
-            if order.price not in self.asks:
-                self.asks[order.price] = OrderQueue(order.price)
-                self.asks[order.price].ingest_order(order)
+            if len(self.buys_heap) > 0 and order.price <= -self.buys_heap[0]: 
+                best_buy_price = -self.buys_heap[0]
+                self.bids[best_buy_price].evict_order()
+                if self.bids[best_buy_price].volume == 0:
+                    heapq.heappop(self.buys_heap)
             else:
-                self.asks[order.price].ingest_order(order)
+                if order.price not in self.asks:
+                    self.asks[order.price] = OrderQueue(order.price)
+                    self.asks[order.price].ingest_order(order)
+                    heapq.heappush(self.sells_heap, order.price)
+                else:
+                    self.asks[order.price].ingest_order(order)
