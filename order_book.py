@@ -43,6 +43,10 @@ class OrderQueue:
             self.queue.popleft()
         else:
             print("The operation couldn't be completed, there are no orders left to evict")
+    def empty_queue(self):
+        self.queue.clear()
+        self.volume = 0
+
 
 class OrderBook:
     #Initiate the OrderBook object
@@ -54,9 +58,10 @@ class OrderBook:
     #For debugging, make it printable
     def __repr__(self):
         return f'OrderBook Object:\nCurrent bids = {self.bids}\nCurrent asks = {self.asks}'
-
+    
     #Method to fill orders or keep them in the book (ordered using heapq O(log(N))) if current market does not allow for instant filling
     def add_order(self, order):
+        trades_executed = []
         #Buy orders:
         if order.side == "buy":
             #Loop over the sells_heap best prices
@@ -69,10 +74,11 @@ class OrderBook:
                     if order.amount >= best_orderq.volume:
                         order.reduce_amount(best_orderq.volume)
                         #Fully fill the OrderQueue at this price
-                        while len(best_orderq.queue) > 0:
-                            best_orderq.evict_order()
+                        trades_executed.append({"price": best_sell_price, "volume": best_orderq.volume})
+                        best_orderq.empty_queue()
                     #Volume in the OrderQueue at this price greater than the order's amount
                     else:
+                        trades_executed.append({"price": best_sell_price, "volume": order.amount})
                         #Loop over the OrderQueue orders until the order is filled
                         while order.active == True:
                             e = best_orderq.queue[0]
@@ -97,6 +103,8 @@ class OrderBook:
                     #Store the price as negative to use the Min-Heap module as a Max-Heap for the buys heapq
                     heapq.heappush(self.buys_heap, -order.price)
                 else:
+                    if self.bids[order.price].volume == 0:
+                        heapq.heappush(self.buys_heap, -order.price)
                     self.bids[order.price].ingest_order(order)
 
 
@@ -118,3 +126,5 @@ class OrderBook:
                     heapq.heappush(self.sells_heap, order.price)
                 else:
                     self.asks[order.price].ingest_order(order)
+
+        return trades_executed
