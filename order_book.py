@@ -3,6 +3,9 @@ import heapq
 import uuid
 
 class Order:
+    #Rigid Memory Allocation to optimize RAM usage and speed
+    __slots__ = ['side', 'price', 'amount', 'id', 'active'] 
+
     #Initiate the Order object
     def __init__(self, side: str, price: float, amount: float):
             self.side = side
@@ -23,6 +26,9 @@ class Order:
              self.active = False
 
 class OrderQueue:
+    #Rigid Memory Allocation to optimize RAM usage and speed
+    __slots__ = ['price', 'queue', 'volume'] 
+
     #Initiate the OrderQueue object
     def __init__(self, price):
         self.price = price
