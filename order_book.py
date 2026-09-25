@@ -61,13 +61,15 @@ class OrderBook:
         self.asks = {}
         self.buys_heap = []
         self.sells_heap = []
+        self.order_tracker = {}
     #For debugging, make it printable
     def __repr__(self):
         return f'OrderBook Object:\nCurrent bids = {self.bids}\nCurrent asks = {self.asks}'
     
     #Method to fill orders or keep them in the book (ordered using heapq O(log(N))) if current market does not allow for instant filling
     def add_order(self, order):
-        trades_executed = []
+        trade_logs = []
+        self.order_tracker[order.id] = order
         #Buy orders:
         if order.side == "buy":
             #Loop over the sells_heap best prices
@@ -79,12 +81,14 @@ class OrderBook:
                     #If the order's amount is greater than the total volume in the OrderQueue at this price
                     if order.amount >= best_orderq.volume:
                         order.reduce_amount(best_orderq.volume)
+                        #If any amount was traded append to the logs
+                        if best_orderq.volume > 0:
+                            trade_logs.append({"price": best_sell_price, "volume": best_orderq.volume})
                         #Fully fill the OrderQueue at this price
-                        trades_executed.append({"price": best_sell_price, "volume": best_orderq.volume})
                         best_orderq.empty_queue()
                     #Volume in the OrderQueue at this price greater than the order's amount
                     else:
-                        trades_executed.append({"price": best_sell_price, "volume": order.amount})
+                        trade_logs.append({"price": best_sell_price, "volume": order.amount})
                         #Loop over the OrderQueue orders until the order is filled
                         while order.active == True:
                             e = best_orderq.queue[0]
@@ -124,12 +128,14 @@ class OrderBook:
                     #If the order's amount is greater than the total volume in the OrderQueue at this price
                     if order.amount >= best_orderq.volume:
                         order.reduce_amount(best_orderq.volume)
+                        #If any amount was traded append to the logs
+                        if best_orderq.volume > 0:
+                            trade_logs.append({"price": best_buy_price, "volume": best_orderq.volume})
                         #Fully fill the OrderQueue at this price
-                        trades_executed.append({"price": best_buy_price, "volume": best_orderq.volume})
                         best_orderq.empty_queue()
                     #Volume in the OrderQueue at this price greater than the order's amount
                     else:
-                        trades_executed.append({"price": best_buy_price, "volume": order.amount})
+                        trade_logs.append({"price": best_buy_price, "volume": order.amount})
                         #Loop over the OrderQueue orders until the order is filled
                         while order.active == True:
                             e = best_orderq.queue[0]
@@ -146,6 +152,7 @@ class OrderBook:
                 #Best available buy price is below the sell order's offer
                 else:
                     break
+                
             #If the sell order still remains to be filled, place it waiting in the book
             if order.active == True:
                 if order.price not in self.asks:
@@ -157,4 +164,19 @@ class OrderBook:
                         heapq.heappush(self.sells_heap, order.price)
                     self.asks[order.price].ingest_order(order)
     
-        return trades_executed
+        return trade_logs
+
+    #Method to cancel a specific order in O(1) given its Id
+    def cancel_order(self, orderId):
+        order = self.order_tracker[orderId]
+        #Logical deletion of the order
+        if order.active == True:
+            if order.side == "buy":
+                self.bids[order.price].volume -= order.amount
+            elif order.side == "sell":
+                self.asks[order.price].volume -= order.amount
+            order.amount = 0
+            order.active = False
+            print(f"The order with Id {orderId} was succesfully cancelled.")
+        else:
+            print("The order is already filled and couldn't be cancelled.")
