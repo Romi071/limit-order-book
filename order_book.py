@@ -8,6 +8,14 @@ class Order:
 
     #Initiate the Order object
     def __init__(self, side: str, price: float, amount: float):
+            #Safeguards against bad input
+            if side not in ['buy', 'sell']:
+                raise ValueError(f"Invalid side '{side}'. Must be 'buy' or 'sell'.")
+            if price <= 0:
+                raise ValueError(f"Invalid price '{price}'. Must be a strictly positive number.")
+            if amount <= 0:
+                raise ValueError(f"Invalid amount '{amount}'. Must be a strictly positive number.")
+            #Variable assignment
             self.side = side
             self.price = price
             self.amount = amount
