@@ -177,14 +177,39 @@ class OrderBook:
     #Method to cancel a specific order in O(1) given its Id
     def cancel_order(self, orderId):
         order = self.order_tracker[orderId]
+        if order.active == False:
+            print(f"The order with Id {orderId} is already filled and couldn't be cancelled.")
+            return
         #Logical deletion of the order
-        if order.active == True:
-            if order.side == "buy":
-                self.bids[order.price].volume -= order.amount
-            elif order.side == "sell":
-                self.asks[order.price].volume -= order.amount
-            order.amount = 0
-            order.active = False
-            print(f"The order with Id {orderId} was succesfully cancelled.")
+        amount = order.amount
+        order.amount = 0
+        order.active = False
+        if order.side == "buy":
+            self.bids[order.price].volume -= amount
+        elif order.side == "sell":
+            self.asks[order.price].volume -= amount
+        print(f"The order with Id {orderId} was succesfully cancelled.")
+
+    #Method to change amount of a specific order in O(1) featuring loss in priority for increments in volume
+    def amend_order(self, orderId, new_amount):
+        order = self.order_tracker[orderId]
+        if order.active == False:
+            print(f"The order with Id {orderId} is already filled and couldn't be amended.")
+            return
+        #Logical deletion of the order and placement of a new order at the back of the deque
+        if new_amount > order.amount:
+            self.cancel_order(order.id)
+            new_order = Order(order.side, order.price, new_amount)
+            self.add_order(new_order)
+            print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}. Priority was lost at this price.")
+        #Modification of the order volume without affecting deque priority
         else:
-            print("The order is already filled and couldn't be cancelled.")
+            amount = order.amount
+            order.amount = new_amount
+            if order.side == "buy":
+                self.bids[order.price].volume -= amount
+                self.bids[order.price].volume += new_amount
+            elif order.side == "sell":
+                self.asks[order.price].volume -= amount
+                self.asks[order.price].volume += new_amount
+            print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}.")
