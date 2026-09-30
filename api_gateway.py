@@ -10,7 +10,7 @@ order_book = OrderBook()
 for order in orders:
     #Bad order format handling armor
     try:
-        verified_order = Order(order['side'], order['price'], order['amount'])
+        verified_order = Order(order['side'], order['price'], order['amount'], order.get('client_id'))
         #If the Order object was succesfully initialized add it to the book
         order_book.add_order(verified_order)
 

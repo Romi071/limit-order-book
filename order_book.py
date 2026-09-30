@@ -4,10 +4,10 @@ import uuid
 
 class Order:
     #Rigid Memory Allocation to optimize RAM usage and speed
-    __slots__ = ['side', 'price', 'amount', 'id', 'active'] 
+    __slots__ = ['side', 'price', 'amount', 'id', 'client_id', 'active'] 
 
     #Initiate the Order object
-    def __init__(self, side: str, price: float, amount: float):
+    def __init__(self, side: str, price: float, amount: float, client_id = None):
             #Safeguards against bad input
             if side not in ['buy', 'sell']:
                 raise ValueError(f"Invalid side '{side}'. Must be 'buy' or 'sell'.")
@@ -20,6 +20,7 @@ class Order:
             self.price = price
             self.amount = amount
             self.id = uuid.uuid4().hex[:8]
+            self.client_id = str(client_id) if client_id is not None else None
             self.active = True
     #For debugging, make Orders printable
     def __repr__(self):
@@ -199,7 +200,7 @@ class OrderBook:
         #Logical deletion of the order and placement of a new order at the back of the deque
         if new_amount > order.amount:
             self.cancel_order(order.id)
-            new_order = Order(order.side, order.price, new_amount)
+            new_order = Order(order.side, order.price, new_amount, order.client_id)
             self.add_order(new_order)
             print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}. Priority was lost at this price.")
         #Modification of the order volume without affecting deque priority
