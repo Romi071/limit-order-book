@@ -15,4 +15,6 @@ for order in orders:
         order_book.add_order(verified_order)
 
     except ValueError as error:
+        print(f"\033[93m ⚠️ Order initialization failed due to the following TypeError: {error} \033[0m")
+    except ValueError as error:
         print(f"\033[93m ⚠️ Order initialization failed due to the following ValueError: {error} \033[0m")

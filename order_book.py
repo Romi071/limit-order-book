@@ -9,12 +9,21 @@ class Order:
     #Initiate the Order object
     def __init__(self, side: str, price: float, amount: float, client_id = None):
             #Safeguards against bad input
-            if side not in ['buy', 'sell']:
-                raise ValueError(f"Invalid side '{side}'. Must be 'buy' or 'sell'.")
-            if price <= 0:
-                raise ValueError(f"Invalid price '{price}'. Must be a strictly positive number.")
-            if amount <= 0:
-                raise ValueError(f"Invalid amount '{amount}'. Must be a strictly positive number.")
+            if isinstance(side, str):
+                if side not in ['buy', 'sell']:
+                    raise ValueError(f"Invalid side value: '{side}'. Must be 'buy' or 'sell'.")
+            else:
+                raise TypeError(f"Invalid type for side input. Must be a string with value 'buy' or 'sell'.")
+            if isinstance(price, float) or isinstance(price, int):
+                if price <= 0:
+                    raise ValueError(f"Invalid price value: '{price}'. Must be a strictly positive number.")
+            else:
+                raise TypeError(f"Invalid type for price input. Must be a float or int with a strictly positive value.")
+            if isinstance(amount, float) or isinstance(amount, int): 
+                if amount <= 0:
+                    raise ValueError(f"Invalid amount value: '{amount}'. Must be a strictly positive number.")
+            else:
+                raise TypeError(f"Invalid type for amount input. Must be a float or int with a strictly positive value.")
             #Variable assignment
             self.side = side
             self.price = price
@@ -177,6 +186,7 @@ class OrderBook:
 
     #Method to cancel a specific order in O(1) given its Id
     def cancel_order(self, orderId):
+        #Armor against bad input
         order = self.order_tracker[orderId]
         if order.active == False:
             print(f"The order with Id {orderId} is already filled and couldn't be cancelled.")
@@ -193,6 +203,11 @@ class OrderBook:
 
     #Method to change amount of a specific order in O(1) featuring loss in priority for increments in volume
     def amend_order(self, orderId, new_amount):
+        #Armor against bad input
+        if isinstance(new_amount, int) == False and isinstance(new_amount, float) == False:
+            raise TypeError(f"Invalid amount type: '{new_amount}'. Must be a strictly positive int or float.")
+        if new_amount <= 0:
+            raise ValueError(f"Invalid amount value: '{new_amount}'. Must be a strictly positive number.")
         order = self.order_tracker[orderId]
         if order.active == False:
             print(f"The order with Id {orderId} is already filled and couldn't be amended.")
@@ -214,3 +229,37 @@ class OrderBook:
                 self.asks[order.price].volume -= amount
                 self.asks[order.price].volume += new_amount
             print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}.")
+
+    #Method to export market depth as a dictionary following the industry's conventions, accepting a depth input.
+    def export_market(self, depth = None):
+        #Armor against bad input
+        if isinstance(depth, int) == False and depth != None:
+            raise TypeError(f"Invalid depth type: '{depth}'. Must be a strictly positive integer.")
+        if isinstance(depth, int) and depth <= 0:
+            raise ValueError(f"Invalid depth value: '{depth}'. Must be a strictly positive integer.")
+        market = {"bids": [], "asks": []}
+        bids_ss = self.buys_heap[:]
+        asks_ss = self.sells_heap[:]
+        #If no depth was specified, output the whole market depth in O((N + M)log(N)) time
+        if depth == None:
+            n = len(bids_ss)
+            m = len(asks_ss)
+            for _ in range(n):
+                best_bid = -bids_ss[0]
+                market["bids"].append([best_bid, self.bids[best_bid].volume])
+                heapq.heappop(bids_ss)
+            for _ in range(m):
+                best_ask = asks_ss[0]
+                market["asks"].append([best_ask, self.asks[best_ask].volume])
+                heapq.heappop(asks_ss)
+        #If depth was specified, output the market up to the specified depth in O((M + K)*log(N)) time
+        else:
+            for _ in range(min(depth, len(bids_ss))):
+                best_bid = -bids_ss[0]
+                market["bids"].append([best_bid, self.bids[best_bid].volume])
+                heapq.heappop(bids_ss)
+            for _ in range(min(depth, len(asks_ss))):
+                best_ask = asks_ss[0]
+                market["asks"].append([best_ask, self.asks[best_ask].volume])
+                heapq.heappop(asks_ss)
+        return market
