@@ -101,12 +101,12 @@ class OrderBook:
                         order.reduce_amount(best_orderq.volume)
                         #If any amount was traded append to the logs
                         if best_orderq.volume > 0:
-                            trade_logs.append({"price": best_sell_price, "volume": best_orderq.volume})
+                            trade_logs.append({"takerId": order.id, "price": best_sell_price, "volume": best_orderq.volume})
                         #Fully fill the OrderQueue at this price
                         best_orderq.empty_queue()
                     #Volume in the OrderQueue at this price greater than the order's amount
                     else:
-                        trade_logs.append({"price": best_sell_price, "volume": order.amount})
+                        trade_logs.append({"takerId": order.id, "price": best_sell_price, "volume": order.amount})
                         #Loop over the OrderQueue orders until the order is filled
                         while order.active == True:
                             e = best_orderq.queue[0]
@@ -148,12 +148,12 @@ class OrderBook:
                         order.reduce_amount(best_orderq.volume)
                         #If any amount was traded append to the logs
                         if best_orderq.volume > 0:
-                            trade_logs.append({"price": best_buy_price, "volume": best_orderq.volume})
+                            trade_logs.append({"takerId": order.id, "price": best_buy_price, "volume": best_orderq.volume})
                         #Fully fill the OrderQueue at this price
                         best_orderq.empty_queue()
                     #Volume in the OrderQueue at this price greater than the order's amount
                     else:
-                        trade_logs.append({"price": best_buy_price, "volume": order.amount})
+                        trade_logs.append({"takerId": order.id, "price": best_buy_price, "volume": order.amount})
                         #Loop over the OrderQueue orders until the order is filled
                         while order.active == True:
                             e = best_orderq.queue[0]
@@ -181,7 +181,7 @@ class OrderBook:
                     if self.asks[order.price].volume == 0:
                         heapq.heappush(self.sells_heap, order.price)
                     self.asks[order.price].ingest_order(order)
-    
+
         return trade_logs
 
     #Method to cancel a specific order in O(1) given its Id
