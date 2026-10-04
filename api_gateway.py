@@ -14,7 +14,7 @@ for order in orders:
         verified_order = Order(order['side'], order['price'], order['amount'], order.get('client_id'))
         #If the Order object was succesfully initialized add it to the book
         order_log = order_book.add_order(verified_order)
-        if len(order_log) > 1:
+        if len(order_log) > 0:
             order_logs.append(order_log)
 
     #Bad order format handling armor

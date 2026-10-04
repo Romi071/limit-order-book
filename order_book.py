@@ -96,27 +96,17 @@ class OrderBook:
                 best_orderq = self.asks[best_sell_price]
                 #If the best available sell price is under the buy order's offer
                 if order.price >= best_sell_price:
-                    #If the order's amount is greater than the total volume in the OrderQueue at this price
-                    if order.amount >= best_orderq.volume:
-                        order.reduce_amount(best_orderq.volume)
-                        #If any amount was traded append to the logs
-                        if best_orderq.volume > 0:
-                            trade_logs.append({"takerId": order.id, "price": best_sell_price, "volume": best_orderq.volume})
-                        #Fully fill the OrderQueue at this price
-                        best_orderq.empty_queue()
-                    #Volume in the OrderQueue at this price greater than the order's amount
-                    else:
-                        trade_logs.append({"takerId": order.id, "price": best_sell_price, "volume": order.amount})
-                        #Loop over the OrderQueue orders until the order is filled
-                        while order.active == True:
-                            e = best_orderq.queue[0]
-                            trade_amount = min(order.amount, e.amount)
-                            order.reduce_amount(trade_amount)
-                            if trade_amount == e.amount:
-                                best_orderq.evict_order()
-                            else:
-                                e.reduce_amount(trade_amount)
-                                best_orderq.volume -= trade_amount
+                    #Loop over the OrderQueue orders until the order is filled or the queue is emptied at this price
+                    while order.active == True and best_orderq.volume > 0:
+                        maker_order = best_orderq.queue[0]
+                        trade_amount = min(order.amount, maker_order.amount)
+                        order.reduce_amount(trade_amount)
+                        if trade_amount == maker_order.amount:
+                            best_orderq.evict_order()
+                        else:
+                            maker_order.reduce_amount(trade_amount)
+                            best_orderq.volume -= trade_amount
+                        trade_logs.append({"takerId": order.id, "makerID": maker_order.id, "price": best_sell_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume == 0:
                         heapq.heappop(self.sells_heap)
@@ -143,34 +133,23 @@ class OrderBook:
                 best_orderq = self.bids[best_buy_price]
                 #If the best available buy price is above the sell order's offer
                 if order.price <= best_buy_price:
-                    #If the order's amount is greater than the total volume in the OrderQueue at this price
-                    if order.amount >= best_orderq.volume:
-                        order.reduce_amount(best_orderq.volume)
-                        #If any amount was traded append to the logs
-                        if best_orderq.volume > 0:
-                            trade_logs.append({"takerId": order.id, "price": best_buy_price, "volume": best_orderq.volume})
-                        #Fully fill the OrderQueue at this price
-                        best_orderq.empty_queue()
-                    #Volume in the OrderQueue at this price greater than the order's amount
-                    else:
-                        trade_logs.append({"takerId": order.id, "price": best_buy_price, "volume": order.amount})
-                        #Loop over the OrderQueue orders until the order is filled
-                        while order.active == True:
-                            e = best_orderq.queue[0]
-                            trade_amount = min(order.amount, e.amount)
-                            order.reduce_amount(trade_amount)
-                            if trade_amount == e.amount:
-                                best_orderq.evict_order()
-                            else:
-                                e.reduce_amount(trade_amount)
-                                best_orderq.volume -= trade_amount
+                    #Loop over the OrderQueue orders until the order is filled or the queue is emptied at this price
+                    while order.active == True and best_orderq.volume > 0:
+                        maker_order = best_orderq.queue[0]
+                        trade_amount = min(order.amount, maker_order.amount)
+                        order.reduce_amount(trade_amount)
+                        if trade_amount == maker_order.amount:
+                            best_orderq.evict_order()
+                        else:
+                            maker_order.reduce_amount(trade_amount)
+                            best_orderq.volume -= trade_amount
+                        trade_logs.append({"takerId": order.id, "makerID": maker_order.id, "price": best_buy_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume == 0:
                         heapq.heappop(self.buys_heap)
                 #Best available buy price is below the sell order's offer
                 else:
                     break
-                
             #If the sell order still remains to be filled, place it waiting in the book
             if order.active == True:
                 if order.price not in self.asks:
