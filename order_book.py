@@ -4,16 +4,19 @@ import uuid
 
 class Order:
     #Rigid Memory Allocation to optimize RAM usage and speed
-    __slots__ = ['side', 'price', 'amount', 'id', 'client_id', 'active'] 
+    __slots__ = ['side', 'price', 'amount', 'id', 'client_id', 'active', 'order_type'] 
 
     #Initiate the Order object
-    def __init__(self, side: str, price: float, amount: float, client_id = None):
+    def __init__(self, side: str, price: float, amount: float, order_type: str = 'GTC', client_id: str = None):
             #Safeguards against bad input
             if isinstance(side, str):
                 if side not in ['buy', 'sell']:
                     raise ValueError(f"Invalid side value: '{side}'. Must be 'buy' or 'sell'.")
+            if isinstance(order_type, str):
+                if order_type not in ['GTC', 'IOC', 'FOK']:
+                    raise ValueError(f"Invalid order type value: '{order_type}'. Must be 'GTC' (default), 'IOC' or 'FOK'.")
             else:
-                raise TypeError(f"Invalid type for side input. Must be a string with value 'buy' or 'sell'.")
+                raise TypeError(f"Invalid type for order type input. Must be a string with value 'GTC' (default), 'IOC' or 'FOK'.")
             if isinstance(price, float) or isinstance(price, int):
                 if price <= 0:
                     raise ValueError(f"Invalid price value: '{price}'. Must be a strictly positive number.")
@@ -28,6 +31,7 @@ class Order:
             self.side = side
             self.price = price
             self.amount = amount
+            self.order_type = order_type
             self.id = uuid.uuid4().hex[:8]
             self.client_id = str(client_id) if client_id is not None else None
             self.active = True
@@ -90,6 +94,26 @@ class OrderBook:
         self.order_tracker[order.id] = order
         #Buy orders:
         if order.side == "buy":
+            #For FOK-type orders:
+            if order.order_type == 'FOK':
+                #Peek-and-restore approach on the heapq to determine whether the order can be filled instantly
+                total_valid_liquidity = 0
+                checked_prices = []
+                while order.amount > total_valid_liquidity and len(self.sells_heap) > 0:
+                    best_price = self.sells_heap[0]
+                    if order.price >= best_price:
+                        total_valid_liquidity += self.asks[best_price].volume
+                        checked_prices.append(best_price)
+                        heapq.heappop(self.sells_heap)
+                    #Valid liquidity was not enough, break
+                    else:
+                        break
+                #Restore Heapq
+                for price in checked_prices:
+                    heapq.heappush(self.sells_heap, price)
+                #If valid liquidity was not enough, return, else let the order enter the market normally
+                if order.amount > total_valid_liquidity:
+                    return trade_logs
             #Loop over the sells_heap best prices
             while order.active == True and len(self.sells_heap) > 0:
                 best_sell_price = self.sells_heap[0]
@@ -113,8 +137,8 @@ class OrderBook:
                 #Best available sell price is above the buy order's offer
                 else:
                     break
-            #If the buy order still remains to be filled, place it waiting in the book
-            if order.active == True:
+            #If the buy order still remains to be filled and its type is GTC, place it waiting in the book
+            if order.active == True and order.order_type == 'GTC':
                 if order.price not in self.bids:
                     self.bids[order.price] = OrderQueue(order.price)
                     self.bids[order.price].ingest_order(order)
@@ -127,6 +151,26 @@ class OrderBook:
 
         #Sell orders:
         if order.side == "sell":
+            #For FOK-type orders:
+            if order.order_type == 'FOK':
+                #Peek-and-restore approach using the heapq to determine whether the order can be filled instantly
+                total_valid_liquidity = 0
+                checked_prices = []
+                while order.amount > total_valid_liquidity and len(self.buys_heap) > 0:
+                    best_price = -self.buys_heap[0]
+                    if order.price <= best_price:
+                        total_valid_liquidity += self.bids[best_price].volume
+                        checked_prices.append(best_price)
+                        heapq.heappop(self.buys_heap)
+                    #Valid liquidity was not enough, break
+                    else:
+                        break
+                #Restore Heapq
+                for price in checked_prices:
+                    heapq.heappush(self.buys_heap, -price)
+                #If valid liquidity was not enough, return, else let the order enter the market normally
+                if order.amount > total_valid_liquidity:
+                    return trade_logs
             #Loop over the buys_heap best prices
             while order.active == True and len(self.buys_heap) > 0:
                 best_buy_price = -self.buys_heap[0]
@@ -150,8 +194,8 @@ class OrderBook:
                 #Best available buy price is below the sell order's offer
                 else:
                     break
-            #If the sell order still remains to be filled, place it waiting in the book
-            if order.active == True:
+            #If the sell order still remains to be filled and its type is GTC, place it waiting in the book
+            if order.active == True and order.order_type == 'GTC':
                 if order.price not in self.asks:
                     self.asks[order.price] = OrderQueue(order.price)
                     self.asks[order.price].ingest_order(order)
