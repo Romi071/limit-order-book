@@ -1,17 +1,17 @@
-# High-Frequency Limit Order Book (LOB) Matching Engine
+# Algorithmic Limit Order Book (LOB) Matching Engine
 
-A high-performance, institutional-grade Limit Order Book (LOB) matching engine built entirely in Python. Designed with a focus on algorithmic efficiency and minimal memory footprint, this engine handles price-time priority matching, advanced execution types (IOC, FOK), partial fills, ultra-fast order cancellations, and a decoupled on-disk ledger pattern.
+An algorithmic Limit Order Book (LOB) matching engine built entirely in Python. Designed as a proof-of-concept mimicking institutional architecture, this engine focuses on computational efficiency and minimal memory footprint. It handles price-time priority matching, advanced execution types (IOC, FOK), partial fills, ultra-fast order cancellations, and a decoupled on-disk ledger pattern.
 
 ## Key Features
 
 *   **Atomic Advanced Order Types:** Native support for GTC (Good-'Til-Cancelled), IOC (Immediate-Or-Cancel), and FOK (Fill-Or-Kill). FOK orders guarantee strict all-or-nothing execution via a surgical state-rollback mechanism that prevents partial fills.
-*   **Institutional Clearinghouse Handshake:** Flattens the matching execution into a continuous $\mathcal{O}(K)$ loop to seamlessly capture both the `takerId` and `makerID` for every match. This generates a continuous, professional trade tape ready for clearinghouse settlement.
-*   **Decoupled Ledger Pattern:** The core engine operates 100% in RAM to maintain microsecond execution speeds. Executed trade logs and the asymmetrical L2 market depth are flushed to an on-disk JSON ledger only at the gateway level, avoiding I/O bottlenecks during live matching.
+*   **Maker/Taker ID Handshake:** Flattens the matching execution into a continuous $\mathcal{O}(K)$ loop to seamlessly capture both the `takerId` and `makerID` for every match. This generates a continuous trade tape ready for clearinghouse-style settlement.
+*   **Decoupled Ledger Pattern:** The core engine operates 100% in RAM to maintain sub-millisecond execution speeds. Executed trade logs and the asymmetrical L2 market depth are flushed to an on-disk JSON ledger only at the gateway level, avoiding I/O bottlenecks during live matching.
 *   **$\mathcal{O}(1)$ Order Cancellations via Lazy Deletion:** Instead of physically scanning and removing orders from queues ($\mathcal{O}(N)$ bottleneck), the engine uses a hash map (`order_tracker`) to locate orders instantly and logically neutralizes them in-place. Ghost orders are automatically vaporized by the execution loop at zero cost.
 *   **Dynamic Order Amendment (DRY):** Supports $\mathcal{O}(1)$ volume modification. Decreasing volume retains queue priority, while increasing volume dynamically triggers a `cancel-and-replace` operation to the back of the queue to maintain strict price-time fairness.
 *   **Price-Time Priority (FIFO):** Utilizes Python's `collections.deque` to maintain strict First-In-First-Out execution for orders sitting at the same price level, ensuring absolute fairness in the queue.
 *   **Logarithmic Price Discovery:** Implements Min-Heaps and Max-Heaps (`heapq`) to track the best bid and ask prices dynamically. This guarantees $\mathcal{O}(\log N)$ performance when updating the spread, even when the book is flooded with hundreds of different price levels.
-*   **C-Level Memory Optimization:** Employs Python's `__slots__` directive on all `Order` and `OrderQueue` objects. This disables dynamic dictionary allocation per object, drastically reducing RAM usage and speeding up attribute access for high-frequency object creation.
+*   **Object Memory Optimization:** Employs Python's `__slots__` directive on all `Order` and `OrderQueue` objects. This disables dynamic dictionary allocation per object, drastically reducing RAM usage and speeding up attribute access for high-frequency object creation.
 *   **Strict Boundary Safeguards:** Built-in validation intercepts invalid data (e.g., negative prices, zero volumes, invalid order types) at object instantiation, throwing a `ValueError` or `TypeError` before bad data can taint the matching engine's state.
 
 ---
@@ -48,3 +48,15 @@ In hardware-accelerated environments, professional exchanges often utilize conti
 Because this engine relies on Python's `heapq` for ultra-fast $\mathcal{O}(1)$ best-price lookups and $\mathcal{O}(\log N)$ insertions, looking at the *second* or *third* best price requires physically popping the best price off the heap. To solve this without triggering a catastrophic $\mathcal{O}(N)$ deep copy of the entire market depth, this engine utilizes a **Peek-and-Restore (State Rollback)** pattern. 
 
 For FOK orders, the engine pops $K$ eligible price levels, tallies the valid liquidity, and immediately pushes the prices back onto the heap ($\mathcal{O}(K \log N)$). While this introduces a small multiplier constant to the time complexity, $K$ remains exceptionally small in live markets, making it a highly efficient, memory-cheap compromise for a locally run Python matching engine.
+
+---
+
+## Current Development: Network Infrastructure & Persistence
+
+The core algorithmic matching logic is complete. Current active development (refer to `server.py`) focuses on wrapping the Python matching engine into a distributed backend microservice.
+
+**Upcoming Milestones:**
+*   **ASGI Web Server Integration:** Implementing **FastAPI** to expose the matching engine to external network traffic, converting the local script into a live, listening server.
+*   **Strict Data Ingestion:** Utilizing **Pydantic** `BaseModel` schemas (backed by Rust core) to validate, sanitize, and strictly type-check incoming JSON REST payloads at the network boundary before they reach the execution logic.
+*   **Real-Time Tape Broadcasting:** Upgrading from static L2 exports to establishing a stateful **WebSocket** connection. This will allow the engine to stream live trade receipts and market depth updates to clients in real time, mimicking production exchange architecture.
+*   **SQL Database Ledger:** Ripping out the temporary JSON disk ledger and implementing an ACID-compliant **SQLite** database. This will introduce permanent storage for trade logs, enabling complex relational queries for quantitative data analysis.
