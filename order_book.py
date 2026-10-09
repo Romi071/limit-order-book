@@ -7,7 +7,7 @@ class Order:
     __slots__ = ['side', 'price', 'amount', 'id', 'client_id', 'active', 'order_type'] 
 
     #Initiate the Order object
-    def __init__(self, side: str, price: float, amount: float, order_type: str = 'GTC', client_id: str = None):
+    def __init__(self, side: str, price: float, amount: float, order_type: str = 'GTC', client_id: str | None = None):
             #Safeguards against bad input
             if isinstance(side, str):
                 if side not in ['buy', 'sell']:
@@ -254,7 +254,7 @@ class OrderBook:
             print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}.")
 
     #Method to export market depth as a dictionary following the industry's conventions, accepting a depth input.
-    def export_market(self, depth = None):
+    def export_market(self, depth: int | None = None):
         #Armor against bad input
         if isinstance(depth, int) == False and depth != None:
             raise TypeError(f"Invalid depth type: '{depth}'. Must be a strictly positive integer.")
