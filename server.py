@@ -1,4 +1,5 @@
 import fastapi
+import asyncio
 from pydantic import BaseModel, Field
 from typing import Literal
 from order_book import OrderBook
@@ -15,6 +16,8 @@ class IncomingOrder(BaseModel):
 #Initialize the fastAPI and OrderBook object
 app = fastapi.FastAPI()
 matching_engine = OrderBook()
+#Create an asyncio global lock instance
+engine_lock = asyncio.Lock()
 
 #Test GET request
 @app.get("/check")
@@ -23,16 +26,18 @@ def check_status():
 
 #POST order request backed up by pydantic´s BaseModel
 @app.post("/order")
-def handle_request(data: IncomingOrder):
-    #Take the incoming order params, generate an Order object and add it to the OrderBook
-    order = Order(data.side, data.price, data.amount, data.order_type, data.client_id)
-    matching_engine.add_order(order)
-    return f"Ingested {data.side} order at price: {data.price}"
+async def handle_request(data: IncomingOrder):
+    #Take the incoming order params, generate an Order object and add it to the OrderBook with asynchronous handling
+    async with engine_lock: 
+        order = Order(data.side, data.price, data.amount, data.order_type, data.client_id)
+        matching_engine.add_order(order)
+        return f"Ingested {data.side} order at price: {data.price}"
 
-#GET market depth using the dedicated method
+#GET market depth using the dedicated method and asynchronous handling
 @app.get("/depth")
-def get_market(depth: int | None = None):
-    market = matching_engine.export_market(depth)
-    return market
+async def get_market(depth: int | None = None):
+    async with engine_lock:
+        market = matching_engine.export_market(depth)
+        return market
 
 #Type 'uvicorn server:app --reload' in the terminal to initialize the server aside from running the script
