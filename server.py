@@ -18,6 +18,7 @@ class IncomingOrder(BaseModel):
 #Initialize the fastAPI and OrderBook object
 app = fastapi.FastAPI()
 matching_engine = OrderBook()
+active_sockets = []
 #Create an asyncio global lock instance
 engine_lock = asyncio.Lock()
 
@@ -33,6 +34,9 @@ async def handle_request(data: IncomingOrder):
     async with engine_lock: 
         order = Order(data.side, data.price, data.amount, data.order_type, data.client_id)
         matching_engine.add_order(order)
+        #Update every active websocket in O(N) time without user-lag bottlenecks using asyncio.gather
+        sending_tasks = [websocket.send_json(matching_engine.export_market()) for websocket in active_sockets]
+        await asyncio.gather(*sending_tasks)
         return f"Ingested {data.side} order at price: {data.price}"
 
 #GET market depth using the dedicated method and asynchronous handling
@@ -42,15 +46,17 @@ async def get_market(depth: int | None = None):
         market = matching_engine.export_market(depth)
         return market
 
-#WebSocket to push live market data in real time [WIP]
+#WebSocket stream to push live market depth updates to users in real time
 @app.websocket("/stream")
 async def stream_market(websocket: WebSocket):
     await websocket.accept()
+    active_sockets.append(websocket)
+    #Try-except block with infinite loop to check if the user is still connected to the websocket and make it inactive if disconnected
     try:
         while True:
-            request = await websocket.receive_text()
-            await websocket.send_text(request)
+            _ = await websocket.receive_text()
     except WebSocketDisconnect:
+        active_sockets.remove(websocket)
         print("Client disconnected")
 
-#Type 'uvicorn server:app --reload' in the terminal to initialize the server aside from running the script
+#Type 'uvicorn server:app --reload' in the terminal to initialize the uvicorn server aside from running the script
