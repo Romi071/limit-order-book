@@ -1,5 +1,7 @@
 import fastapi
 import asyncio
+from fastapi import WebSocket
+from fastapi import WebSocketDisconnect
 from pydantic import BaseModel, Field
 from typing import Literal
 from order_book import OrderBook
@@ -39,5 +41,16 @@ async def get_market(depth: int | None = None):
     async with engine_lock:
         market = matching_engine.export_market(depth)
         return market
+
+#WebSocket to push live market data in real time [WIP]
+@app.websocket("/stream")
+async def stream_market(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            request = await websocket.receive_text()
+            await websocket.send_text(request)
+    except WebSocketDisconnect:
+        print("Client disconnected")
 
 #Type 'uvicorn server:app --reload' in the terminal to initialize the server aside from running the script
