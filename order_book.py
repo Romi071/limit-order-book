@@ -130,7 +130,7 @@ class OrderBook:
                         else:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
-                        trade_logs.append({"takerId": order.id, "makerID": maker_order.id, "price": best_sell_price, "volume": trade_amount})
+                        trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_sell_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume == 0:
                         heapq.heappop(self.sells_heap)
@@ -187,7 +187,7 @@ class OrderBook:
                         else:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
-                        trade_logs.append({"takerId": order.id, "makerID": maker_order.id, "price": best_buy_price, "volume": trade_amount})
+                        trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_buy_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume == 0:
                         heapq.heappop(self.buys_heap)
@@ -261,6 +261,7 @@ class OrderBook:
         if isinstance(depth, int) and depth <= 0:
             raise ValueError(f"Invalid depth value: '{depth}'. Must be a strictly positive integer.")
         market = {"bids": [], "asks": []}
+        #Create copies of the OrderBooks´s heaps to ensure state persistence when checking
         bids_ss = self.buys_heap[:]
         asks_ss = self.sells_heap[:]
         #If no depth was specified, output the whole market depth in O((N + M)log(N)) time
