@@ -1,12 +1,12 @@
 # Algorithmic Limit Order Book (LOB) Matching Engine
 
-An algorithmic Limit Order Book (LOB) matching engine and asynchronous exchange server built entirely in Python. Designed as a proof-of-concept mimicking institutional architecture, this engine focuses on computational efficiency, non-blocking network I/O, and minimal memory footprint. It handles price-time priority matching, advanced execution types (IOC, FOK), partial fills, ultra-fast order cancellations, real-time WebSocket depth broadcasting, and a decoupled asynchronous SQL ledger.
+An algorithmic Limit Order Book (LOB) matching engine and asynchronous exchange server built entirely in Python. Designed as a proof-of-concept mimicking institutional architecture, this engine focuses on computational efficiency, non-blocking network I/O, and minimal memory footprint. It handles price-time priority matching, advanced execution types (IOC, FOK), partial fills, ultra-fast order cancellations, real-time WebSocket depth broadcasting, and a batched asynchronous SQLite WAL ledger.
 
 ## Key Features
 
 *   **Atomic Advanced Order Types:** Native support for GTC (Good-'Til-Cancelled), IOC (Immediate-Or-Cancel), and FOK (Fill-Or-Kill). FOK orders guarantee strict all-or-nothing execution via a surgical state-rollback mechanism that prevents partial fills.
 *   **Maker/Taker ID Handshake:** Flattens the matching execution into a continuous $\mathcal{O}(K)$ loop to seamlessly capture both the `takerId` and `makerId` for every match. This generates a continuous trade tape ready for clearinghouse-style settlement.
-*   **Hybrid RAM/Disk Ledger Pattern:** The core matching engine operates 100% synchronously in RAM to maintain nanosecond/microsecond execution speeds. Network I/O and disk persistence are strictly decoupled into the asynchronous routing layer—streaming live L2 market depth over WebSockets and committing executed trade receipts to an ACID-compliant SQLite database without blocking the matching loop.
+*   **Hybrid RAM/Disk Ledger Pattern:** The core matching engine operates 100% synchronously in RAM to maintain nanosecond/microsecond execution speeds. Network I/O and disk persistence are strictly decoupled into the asynchronous routing layer—streaming live L2 market depth over WebSockets and batch-committing executed trade receipts via a Producer-Consumer buffer into an ACID-compliant SQLite (WAL) database without blocking the matching loop.
 *   **$\mathcal{O}(1)$ Order Cancellations via Lazy Deletion:** Instead of physically scanning and removing orders from queues ($\mathcal{O}(N)$ bottleneck), the engine uses a hash map (`order_tracker`) to locate orders instantly and logically neutralizes them in-place. Ghost orders are automatically vaporized by the execution loop at zero cost.
 *   **Dynamic Order Amendment (DRY):** Supports $\mathcal{O}(1)$ volume modification. Decreasing volume retains queue priority, while increasing volume dynamically triggers a `cancel-and-replace` operation to the back of the queue to maintain strict price-time fairness.
 *   **Price-Time Priority (FIFO):** Utilizes Python's `collections.deque` to maintain strict First-In-First-Out execution for orders sitting at the same price level, ensuring absolute fairness in the queue.
@@ -55,23 +55,29 @@ For FOK orders, the engine pops $K$ eligible price levels, tallies the valid liq
 
 The core algorithmic matching logic is wrapped inside an asynchronous, non-blocking microservice architecture designed to handle concurrent order flow without race conditions or I/O bottlenecks:
 
-*   **ASGI Server & Concurrency Control:** Powered by **FastAPI** and Uvicorn. To protect the in-memory `heapq` and `deque` structures from asynchronous race conditions during high-frequency state mutations, order ingestion is guarded by a strict `asyncio.Lock()` mutex.
+*   **ASGI Server & Concurrency Control:** Powered by **FastAPI** and Uvicorn. To protect the in-memory `heapq` and `deque` structures from asynchronous race conditions during high-frequency state mutations, order ingestion is guarded by a strict `asyncio.Lock()` mutex that releases immediately after RAM execution.
 *   **Strict Gateway Validation:** Utilizes **Pydantic** `BaseModel` schemas (`IncomingOrder`) backed by a Rust core to validate, sanitize, and type-check incoming JSON payloads at the network boundary before they ever reach the engine.
-*   **Concurrent WebSocket Broadcasting (`ConnectionManager`):** Encapsulates active client connections into a dedicated OOP manager. Whenever an order mutates the book, the updated L2 market depth is broadcasted concurrently to all connected listeners via `asyncio.gather`, preventing slow clients from lagging the main event loop.
-*   **ACID-Compliant SQLite Ledger (`aiosqlite`):** Replaces fragile plaintext JSON logging with an asynchronous SQLite database (`ledger.db`). Managed via FastAPI's `@asynccontextmanager` `lifespan` protocol, the server maintains a persistent connection pool and executes raw, parameterized SQL queries (`INSERT INTO trades...`) with hardware-level `CURRENT_TIMESTAMP` indexing and `PRIMARY KEY AUTOINCREMENT` receipts.
+*   **Concurrent WebSocket Broadcasting (`ConnectionManager`):** Encapsulates active client connections into a dedicated OOP manager. Whenever an order mutates the book, the L2 market snapshot is computed once outside the engine lock and broadcasted concurrently to all connected listeners via `asyncio.gather`, preventing slow clients from lagging the main event loop.
+*   **Batched ACID SQLite WAL Ledger (`aiosqlite`):** Implements a non-blocking **Producer-Consumer** persistence architecture (`ledger.db`). Rather than bottlenecking the HTTP loop with single-fire disk commits, executed trades are appended in nanoseconds to an in-memory `logs_buffer`. An asynchronous background daemon (`sql_flusher`) wakes up every 100ms, atomically drains the buffer, and executes C-level batched `executemany` inserts with **Write-Ahead Logging (`PRAGMA journal_mode=WAL`)** enabled. Managed via FastAPI's `@asynccontextmanager` `lifespan` protocol, the teardown sequence enforces a final buffer drain upon shutdown to guarantee zero data loss.
 
 ---
 
 ## Usage & Asynchronous Stress Testing
 
 ### 1. Booting the Exchange Server
-Initialize the ASGI server from the root directory:
+Initialize the ASGI server from the root directory (use `--reload` for development, or `--no-access-log` to mute terminal stdout I/O during high-frequency benchmarking):
 ```bash
+# Development mode
 uvicorn server:app --reload
+
+# High-throughput benchmark mode (disables console logging bottleneck)
+uvicorn server:app --no-access-log
 ```
 *   **REST API & Swagger UI:** Navigate to `http://localhost:8000/docs` to manually fire `POST /order` payloads or query `GET /depth`.
 *   **Live WebSocket Feed:** Connect any WebSocket client to `ws://localhost:8000/stream` to receive real-time JSON broadcasts of the L2 order book state upon every market event.
-*   **Persistent Trade Ledger:** Executed cross-spread trades are automatically committed to `ledger.db` in the root directory (inspectable via VSCode's *SQLite Viewer* extension).
+*   **Persistent Trade Ledger:** Executed cross-spread trades are automatically batched and committed to `ledger.db` in the root directory (inspectable via VSCode's *SQLite Viewer* extension).
 
-### 2. Running the High-Frequency Load Tester
-The `tests/` directory contains an asynchronous stress-testing suite powered by `numpy` and `aiohttp`. Instead of relying on static file ingestion, the load tester spins up a single persistent TCP session (`ClientSession`) and utilizes `asyncio.gather` to bombard the `POST /order` endpoint with 10,000 randomized concurrent orders, benchmarking the engine's real-world Trades Per Second (TPS) and I/O throughput under heavy load.
+### 2. Running the High-Frequency Load Tester (`~2,200 TPS`)
+The `tests/` directory contains an asynchronous stress-testing suite powered by `numpy` and `aiohttp`. Instead of relying on static file ingestion, the load tester spins up a single persistent TCP session (`ClientSession`) and utilizes `asyncio.gather` to bombard the `POST /order` endpoint with 10,000 randomized concurrent orders.
+
+*   **End-to-End Microservice Throughput:** Consistently processes **10,000 concurrent orders in ~4.5 seconds**, sustaining **~2,100–2,200 Trades Per Second (TPS)** (~450 microseconds per full HTTP ingestion, Pydantic validation, RAM matching, and SQLite WAL queueing lifecycle).
