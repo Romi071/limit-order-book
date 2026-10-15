@@ -13,6 +13,8 @@ from order_book import Order
 @asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
     app.state.db = await aiosqlite.connect("ledger.db")
+    await app.state.db.execute("PRAGMA journal_mode=WAL;")
+    await app.state.db.execute("PRAGMA synchronous=NORMAL;")
     await app.state.db.execute("""
                     CREATE TABLE IF NOT EXISTS trades (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,15 +25,26 @@ async def lifespan(app: fastapi.FastAPI):
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                     ); """)
     await app.state.db.commit()
+    #Initiate the infinite background loop sql flusher
+    flusher_task = asyncio.create_task(sql_flusher())
+
     yield
+
+    #If the server closed and logs were remaining in the buffer, commit them to the SQLite database to prevent state loss
+    flusher_task.cancel()
+    if len(logs_buffer) > 0:
+        logs_buffer_tuples = [(log["makerId"], log["takerId"], log["price"], log["volume"]) for log in logs_buffer]
+        await app.state.db.executemany(
+            "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
+        await app.state.db.commit()
     #Close the .db file gracefully when the server stops running
     await app.state.db.close()
 
-#Initialize the fastAPI and OrderBook object and create asyncio global lock instances
+#Initialize the fastAPI and OrderBook object and create an asyncio global lock instance
 app = fastapi.FastAPI(lifespan=lifespan)
 matching_engine = OrderBook()
 engine_lock = asyncio.Lock()
-db_lock = asyncio.Lock()
+logs_buffer = []
 
 #Define the pydantic class declaring the expected shape of the input variables to generate orders
 class IncomingOrder(BaseModel):
@@ -68,17 +81,21 @@ class ConnectionManager:
         sending_tasks = [websocket.send_json(market_snapshot) for websocket in self.active_sockets]
         await asyncio.gather(*sending_tasks)
 
+#Initialize the connection manager
 connection_manager = ConnectionManager()
 
-#Function to save order logs into the SQLite database
-async def log_to_db(order_logs):
-    #Write every log into the SQL database and commit them
-    async with db_lock: 
-        for log in order_logs:
-            await app.state.db.execute(
-                "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", 
-                (log["makerId"], log["takerId"], log["price"], log["volume"]))
-        await app.state.db.commit()
+#Background infinite loop function to commit all logs in the buffer into the SQLite database
+async def sql_flusher():
+    while True:
+        #Leave time for the server to process between flushes
+        await asyncio.sleep(0.1)
+        #If there are any logs in the buffer, convert them to a tuple and insert them into db in C-speed
+        if len(logs_buffer) > 0:
+            logs_buffer_tuples = [(log["makerId"], log["takerId"], log["price"], log["volume"]) for log in logs_buffer]
+            logs_buffer.clear()
+            await app.state.db.executemany(
+                "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
+            await app.state.db.commit()
 
 #Test GET request
 @app.get("/check")
@@ -98,7 +115,7 @@ async def handle_request(data: IncomingOrder):
         await connection_manager.update_broadcast()
     #Create a task to record the logs into SQLite without affecting engine performance
     if len(order_logs) > 0:
-        asyncio.create_task(log_to_db(order_logs))
+        logs_buffer.extend(order_logs)
 
     return f"Ingested {data.side} order with amount {data.amount} at price: {data.price}"
 
@@ -116,5 +133,5 @@ async def get_market(depth: int | None = None):
 async def stream_market(websocket: WebSocket):
     await connection_manager.new_connection(websocket)
 
-#Type 'uvicorn server:app --reload' in the terminal to initialize the uvicorn server aside from running the script
+#Type 'uvicorn server:app --no-access-log' in the terminal to initialize the uvicorn server aside from running the script
 #The server is running locally on port 8000 (default). For WebSocket connection the URL is: 'ws://localhost:8000/stream'
