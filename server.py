@@ -27,10 +27,11 @@ async def lifespan(app: fastapi.FastAPI):
     #Close the .db file gracefully when the server stops running
     await app.state.db.close()
 
-#Initialize the fastAPI and OrderBook object and create an asyncio global lock instance
+#Initialize the fastAPI and OrderBook object and create asyncio global lock instances
 app = fastapi.FastAPI(lifespan=lifespan)
 matching_engine = OrderBook()
 engine_lock = asyncio.Lock()
+db_lock = asyncio.Lock()
 
 #Define the pydantic class declaring the expected shape of the input variables to generate orders
 class IncomingOrder(BaseModel):
@@ -63,10 +64,21 @@ class ConnectionManager:
     
     async def update_broadcast(self):
         #Update every active websocket in O(N) time without user-lag bottlenecks using asyncio.gather
-        sending_tasks = [websocket.send_json(matching_engine.export_market()) for websocket in self.active_sockets]
+        market_snapshot = matching_engine.export_market()
+        sending_tasks = [websocket.send_json(market_snapshot) for websocket in self.active_sockets]
         await asyncio.gather(*sending_tasks)
 
 connection_manager = ConnectionManager()
+
+#Function to save order logs into the SQLite database
+async def log_to_db(order_logs):
+    #Write every log into the SQL database and commit them
+    async with db_lock: 
+        for log in order_logs:
+            await app.state.db.execute(
+                "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", 
+                (log["makerId"], log["takerId"], log["price"], log["volume"]))
+        await app.state.db.commit()
 
 #Test GET request
 @app.get("/check")
@@ -80,18 +92,17 @@ async def handle_request(data: IncomingOrder):
     async with engine_lock: 
         order = Order(data.side, data.price, data.amount, data.order_type, data.client_id)
         order_logs = matching_engine.add_order(order)
-        
-        #Broadcast the change in market depth to every active websocket
+
+    #Broadcast the change in market depth to every active websocket
+    if len(connection_manager.active_sockets) > 0:
         await connection_manager.update_broadcast()
+    #Create a task to record the logs into SQLite without affecting engine performance
+    if len(order_logs) > 0:
+        asyncio.create_task(log_to_db(order_logs))
 
-        #Write every log into the SQL database and commit them
-        for log in order_logs:
-            await app.state.db.execute(
-                "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", 
-                (log["makerId"], log["takerId"], log["price"], log["volume"]))
-        await app.state.db.commit()
+    return f"Ingested {data.side} order with amount {data.amount} at price: {data.price}"
 
-        return f"Ingested {data.side} order with amount {data.amount} at price: {data.price}"
+
 
 #GET market depth using the dedicated method and asynchronous handling
 @app.get("/depth")
