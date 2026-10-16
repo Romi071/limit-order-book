@@ -97,11 +97,6 @@ async def sql_flusher():
                 "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
             await app.state.db.commit()
 
-#Test GET request
-@app.get("/check")
-def check_status():
-    return {"status": "Online"}
-
 #POST order request backed up by pydantic's BaseModel
 @app.post("/order")
 async def handle_request(data: IncomingOrder):
@@ -112,14 +107,17 @@ async def handle_request(data: IncomingOrder):
 
     #Broadcast the change in market depth to every active websocket
     if len(connection_manager.active_sockets) > 0:
-        await connection_manager.update_broadcast()
+        asyncio.create_task(connection_manager.update_broadcast())
     #Create a task to record the logs into SQLite without affecting engine performance
     if len(order_logs) > 0:
         logs_buffer.extend(order_logs)
 
     return f"Ingested {data.side} order with amount {data.amount} at price: {data.price}"
 
-
+#Test GET request
+@app.get("/check")
+def check_status():
+    return {"status": "Online"}
 
 #GET market depth using the dedicated method and asynchronous handling
 @app.get("/depth")
