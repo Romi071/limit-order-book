@@ -2,12 +2,9 @@ import fastapi
 import asyncio
 import aiosqlite
 from contextlib import asynccontextmanager
-from fastapi import WebSocket
-from fastapi import WebSocketDisconnect
 from pydantic import BaseModel, Field
 from typing import Literal
-from order_book import OrderBook
-from order_book import Order
+from order_book import OrderBook, Order
 
 #Initialize the SQLite database file using an async context manager
 @asynccontextmanager
@@ -46,13 +43,22 @@ matching_engine = OrderBook()
 engine_lock = asyncio.Lock()
 logs_buffer = []
 
-#Define the pydantic class declaring the expected shape of the input variables to generate orders
+#Define the pydantic BaseModel classes declaring the expected shape of the input variables to generate/cancel/amend orders
 class IncomingOrder(BaseModel):
     side: Literal["buy", "sell"]
     price: float = Field(gt=0)
-    amount: float = Field(gt=0)
+    amount: float = Field(ge=1e-8)
     order_type: Literal["GTC", "IOC", "FOK"] = 'GTC'
-    client_id: str | None = None
+    client_tag: str | None = None
+
+class CancelOrder(BaseModel):
+    orderId: str
+    secret_token: str
+    
+class AmendOrder(BaseModel):
+    orderId: str
+    secret_token: str
+    new_amount: float = Field(ge=1e-8)
 
 #WebSocket connection manager class
 class ConnectionManager:
@@ -72,7 +78,7 @@ class ConnectionManager:
         try:
             while True:
                 _ = await websocket.receive_text()
-        except WebSocketDisconnect:
+        except fastapi.WebSocketDisconnect:
             await self.handle_disconnection(websocket)
     
     async def update_broadcast(self):
@@ -97,12 +103,12 @@ async def sql_flusher():
                 "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
             await app.state.db.commit()
 
-#POST order request backed up by pydantic's BaseModel
+#POST order request backed up by pydantic's BaseModel and lock async handling
 @app.post("/order")
 async def handle_request(data: IncomingOrder):
-    #Take the incoming order params, generate an Order object and add it to the OrderBook with asynchronous handling
     async with engine_lock: 
-        order = Order(data.side, data.price, data.amount, data.order_type, data.client_id)
+        #Take the incoming order params, generate an Order object and add it to the OrderBook
+        order = Order(data.side, data.price, data.amount, data.order_type, data.client_tag)
         order_logs = matching_engine.add_order(order)
 
     #Broadcast the change in market depth to every active websocket
@@ -112,7 +118,61 @@ async def handle_request(data: IncomingOrder):
     if len(order_logs) > 0:
         logs_buffer.extend(order_logs)
 
-    return f"Ingested {data.side} order with amount {data.amount} at price: {data.price}"
+    return {'orderId': order.id,
+            'secret_token': order.secret_token,
+            'client_tag': order.client_tag,
+            'active': order.active,
+            'amount': order.amount,
+            'fills': order_logs
+            }
+
+#POST cancel order request backed up by pydantic's BaseModel and lock async handling
+@app.post("/cancel")
+async def cancel_request(data: CancelOrder):
+    async with engine_lock: 
+        try:
+            success = matching_engine.cancel_order(data.orderId, data.secret_token)
+        #The orderId was not found (it never existed): HTTP 404 Not found
+        except KeyError as exception:
+            success = False
+            return fastapi.responses.JSONResponse(status_code=404, content={'success': success, 'detail': str(exception)})
+        #The secret token was incorrect: HTTP 401 Unauthorized
+        except PermissionError as exception:
+            success = False
+            return fastapi.responses.JSONResponse(status_code=401, content={'success': success, 'detail': str(exception)})
+    #If the cancel succeeded: return HTTP 200 OK
+    if success:
+        #Broadcast the change in market depth to every active websocket
+        if len(connection_manager.active_sockets) > 0:
+            asyncio.create_task(connection_manager.update_broadcast())
+        return fastapi.responses.JSONResponse(status_code=200, content={'success': success, 'detail': 'Order Cancelled'})
+    else:
+        #The order was found, but it is already filled: HTTP 400 Bad request
+        return fastapi.responses.JSONResponse(status_code=400, content={'success': success, 'detail': f"The order with Id {data.orderId} is already filled and couldn't be cancelled."})
+
+#POST amend order request backed up by pydantic's BaseModel and lock async handling
+@app.post("/amend")
+async def amend_request(data: AmendOrder):
+    async with engine_lock: 
+        try:
+            success = matching_engine.amend_order(data.orderId, data.secret_token, data.new_amount)
+        #The orderId was not found (it never existed): HTTP 404 Not found
+        except KeyError as exception:
+            success = False
+            return fastapi.responses.JSONResponse(status_code=404, content={'success': success, 'detail': str(exception)})
+        #The secret token was incorrect: HTTP 401 Unauthorized
+        except PermissionError as exception:
+            success = False
+            return fastapi.responses.JSONResponse(status_code=401, content={'success': success, 'detail': str(exception)})
+    #If the amend succeeded: return HTTP 200 OK
+    if success:
+        #Broadcast the change in market depth to every active websocket
+        if len(connection_manager.active_sockets) > 0:
+            asyncio.create_task(connection_manager.update_broadcast())
+        return fastapi.responses.JSONResponse(status_code=200, content={'success': success, 'detail': 'Order Amended'})
+    else:
+        #The order was found, but it is already filled: HTTP 400 Bad request
+        return fastapi.responses.JSONResponse(status_code=400, content={'success': success, 'detail': f"The order with Id {data.orderId} is already filled and couldn't be amended."})
 
 #Test GET request
 @app.get("/check")
@@ -121,14 +181,14 @@ def check_status():
 
 #GET market depth using the dedicated method and asynchronous handling
 @app.get("/depth")
-async def get_market(depth: int | None = None):
+async def get_market(depth: int | None = fastapi.Query(default=None, gt=0)):
     async with engine_lock:
         market = matching_engine.export_market(depth)
         return market
 
 #WebSocket stream to push live market depth updates to users in real time
 @app.websocket("/stream")
-async def stream_market(websocket: WebSocket):
+async def stream_market(websocket: fastapi.WebSocket):
     await connection_manager.new_connection(websocket)
 
 #Type 'uvicorn server:app --no-access-log' in the terminal to initialize the uvicorn server aside from running the script
