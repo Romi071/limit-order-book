@@ -131,48 +131,40 @@ async def handle_request(data: IncomingOrder):
 async def cancel_request(data: CancelOrder):
     async with engine_lock: 
         try:
-            success = matching_engine.cancel_order(data.orderId, data.secret_token)
-        #The orderId was not found (it never existed): HTTP 404 Not found
-        except KeyError as exception:
-            success = False
-            return fastapi.responses.JSONResponse(status_code=404, content={'success': success, 'detail': str(exception)})
+            response = matching_engine.cancel_order(data.orderId, data.secret_token)
         #The secret token was incorrect: HTTP 401 Unauthorized
         except PermissionError as exception:
-            success = False
-            return fastapi.responses.JSONResponse(status_code=401, content={'success': success, 'detail': str(exception)})
+            return fastapi.responses.JSONResponse(status_code=401, content={'success': False, 'detail': str(exception)})
+
     #If the cancel succeeded: return HTTP 200 OK
-    if success:
+    if response['success']:
         #Broadcast the change in market depth to every active websocket
         if len(connection_manager.active_sockets) > 0:
             asyncio.create_task(connection_manager.update_broadcast())
-        return fastapi.responses.JSONResponse(status_code=200, content={'success': success, 'detail': 'Order Cancelled'})
+        return fastapi.responses.JSONResponse(status_code=200, content=response)
+    #The order was found, but it is already filled: HTTP 404 Not Found
     else:
-        #The order was found, but it is already filled: HTTP 400 Bad request
-        return fastapi.responses.JSONResponse(status_code=400, content={'success': success, 'detail': f"The order with Id {data.orderId} is already filled and couldn't be cancelled."})
-
+        return fastapi.responses.JSONResponse(status_code=404, content=response)
+    
 #POST amend order request backed up by pydantic's BaseModel and lock async handling
 @app.post("/amend")
 async def amend_request(data: AmendOrder):
     async with engine_lock: 
         try:
-            success = matching_engine.amend_order(data.orderId, data.secret_token, data.new_amount)
-        #The orderId was not found (it never existed): HTTP 404 Not found
-        except KeyError as exception:
-            success = False
-            return fastapi.responses.JSONResponse(status_code=404, content={'success': success, 'detail': str(exception)})
+            response = matching_engine.amend_order(data.orderId, data.secret_token, data.new_amount)
         #The secret token was incorrect: HTTP 401 Unauthorized
         except PermissionError as exception:
-            success = False
-            return fastapi.responses.JSONResponse(status_code=401, content={'success': success, 'detail': str(exception)})
+            return fastapi.responses.JSONResponse(status_code=401, content={'success': False, 'detail': str(exception)})
+        
     #If the amend succeeded: return HTTP 200 OK
-    if success:
+    if response['success']:
         #Broadcast the change in market depth to every active websocket
         if len(connection_manager.active_sockets) > 0:
             asyncio.create_task(connection_manager.update_broadcast())
-        return fastapi.responses.JSONResponse(status_code=200, content={'success': success, 'detail': 'Order Amended'})
+        return fastapi.responses.JSONResponse(status_code=200, content=response)
+    #The order was found, but it is already filled: HTTP 404 Not found
     else:
-        #The order was found, but it is already filled: HTTP 400 Bad request
-        return fastapi.responses.JSONResponse(status_code=400, content={'success': success, 'detail': f"The order with Id {data.orderId} is already filled and couldn't be amended."})
+        return fastapi.responses.JSONResponse(status_code=404, content=response)
 
 #Test GET request
 @app.get("/check")

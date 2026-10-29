@@ -44,7 +44,7 @@ class Order:
     
     #Method to reduce the executed amount from the order and deactivate it if it was fully filled
     def reduce_amount(self, executed_amount):
-        if self.amount > executed_amount:
+        if self.amount - executed_amount >= 1e-8:
             self.amount -= executed_amount
         else:
              self.amount = 0
@@ -132,8 +132,9 @@ class OrderBook:
                         maker_order = best_orderq.queue[0]
                         trade_amount = min(order.amount, maker_order.amount)
                         order.reduce_amount(trade_amount)
-                        if trade_amount == maker_order.amount:
+                        if maker_order.amount - trade_amount < self.min_lot_size:
                             best_orderq.evict_order()
+                            del self.order_tracker[maker_order.id]
                         else:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
@@ -194,8 +195,9 @@ class OrderBook:
                         maker_order = best_orderq.queue[0]
                         trade_amount = min(order.amount, maker_order.amount)
                         order.reduce_amount(trade_amount)
-                        if trade_amount == maker_order.amount:
+                        if maker_order.amount - trade_amount < self.min_lot_size:
                             best_orderq.evict_order()
+                            del self.order_tracker[maker_order.id]
                         else:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
@@ -228,30 +230,34 @@ class OrderBook:
     def cancel_order(self, orderId, secret_token):
         #Armor against bad input
         if orderId not in self.order_tracker:
-            raise KeyError(f"The operation couldn't be completed. The order with id {orderId} wasn't found in the OrderBook.")
+            #print(f"The order with Id {orderId} is already filled (or it doesn't exist) and couldn't be cancelled.")
+            return {'success': False, 'cancelled_amount': 0, 'detail': "The order is already filled (or it doesn't exist) and couldn't be cancelled."}
         order = self.order_tracker[orderId]
         if secret_token != order.secret_token:
             raise PermissionError("Unauthorized procedure. Incorrect secret token.")
-        if order.active == False:
-            #print(f"The order with Id {orderId} is already filled and couldn't be cancelled.")
-            return False
         
-        #Logical deletion of the order
+        #Logical (lazy) deletion of the order
         amount = order.amount
         order.amount = 0
         order.active = False
+        del self.order_tracker[orderId]
         if order.side == "buy":
             self.bids[order.price].volume -= amount
+            if self.bids[order.price].volume < self.min_lot_size:
+                self.bids[order.price].empty_queue()
         elif order.side == "sell":
             self.asks[order.price].volume -= amount
+            if self.asks[order.price].volume < self.min_lot_size:
+                self.asks[order.price].empty_queue()
         #print(f"The order with Id {orderId} was succesfully cancelled.")
-        return True
+        return {'success': True, 'cancelled_amount': amount, 'detail': "The order was succesfully cancelled."}
 
     #Method to change amount of a specific order in O(1) featuring loss in priority for increments in volume
     def amend_order(self, orderId, secret_token, new_amount):
         #Armor against bad input
         if orderId not in self.order_tracker:
-            raise KeyError(f"The operation couldn't be completed. The order with id {orderId} wasn't found in the OrderBook.")
+            #print(f"The order with Id {orderId} is already filled (or it doesn't exist) and couldn't be amended.")
+            return {'success': False, 'detail': "The order is already filled (or it doesn't exist) and couldn't be amended."}
         if isinstance(new_amount, int) == False and isinstance(new_amount, float) == False:
             raise TypeError(f"Invalid amount type: '{new_amount}'. Must be int or float.")
         if new_amount < self.min_lot_size:
@@ -259,12 +265,11 @@ class OrderBook:
         order = self.order_tracker[orderId]
         if secret_token != order.secret_token:
             raise PermissionError("Unauthorized procedure. Incorrect secret token.")
-        if order.active == False:
-            #print(f"The order with Id {orderId} is already filled and couldn't be amended.")
-            return False
         
         #If new amount increased volume: logical deletion of the order and placement of a new order at the back of the deque
-        if new_amount > order.amount:
+        amount = order.amount
+        if new_amount > amount:
+            prio_lost = True
             self.cancel_order(orderId, secret_token)
             new_order = Order(order.side, order.price, new_amount, 'GTC', order.client_tag)
             new_order.id = orderId
@@ -274,7 +279,7 @@ class OrderBook:
             #print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}. Priority was lost at this price.")
         #Else: modification of the order volume without affecting deque priority
         else:
-            amount = order.amount
+            prio_lost = False
             order.amount = new_amount
             if order.side == "buy":
                 self.bids[order.price].volume -= amount
@@ -283,7 +288,7 @@ class OrderBook:
                 self.asks[order.price].volume -= amount
                 self.asks[order.price].volume += new_amount
             #print(f"The order with Id {orderId} was succesfully amended. New amount: {new_amount}.")
-        return True
+        return {'success': True, 'old_amount': amount, 'new_amount': new_amount, 'priority_lost': prio_lost, 'detail': "The order was succesfully amended."}
 
     #Method to export market depth as a dictionary following the industry's conventions, accepting a depth input.
     def export_market(self, depth: int | None = None):
