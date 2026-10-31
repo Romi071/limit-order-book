@@ -34,8 +34,8 @@ class Order:
             self.price = price
             self.amount = amount
             self.order_type = order_type
-            self.id = uuid.uuid4().hex[:8]
-            self.secret_token = uuid.uuid4().hex[:8]
+            self.id = uuid.uuid4().hex[:16]
+            self.secret_token = uuid.uuid4().hex[:16]
             self.client_tag = str(client_tag) if client_tag is not None else None
             self.active = True
     #For debugging, make Orders printable
@@ -89,6 +89,8 @@ class OrderBook:
         self.sells_heap = []
         self.order_tracker = {}
         self.min_lot_size = 1e-8
+        self.cancel_count = 0
+        self.gc_threshold = 1000
     #For debugging, make it printable
     def __repr__(self):
         return f'OrderBook Object:\nCurrent bids = {self.bids}\nCurrent asks = {self.asks}'
@@ -96,9 +98,6 @@ class OrderBook:
     #Method to fill orders or keep them in the book (ordered using heapq O(log(N))) if current market does not allow for instant filling
     def add_order(self, order):
         trade_logs = []
-        #Only track orders that stay in the book
-        if order.order_type == 'GTC':
-            self.order_tracker[order.id] = order
         #Buy orders:
         if order.side == "buy":
             #For FOK-type orders:
@@ -106,7 +105,7 @@ class OrderBook:
                 #Peek-and-restore approach on the heapq to determine whether the order can be filled instantly
                 total_valid_liquidity = 0
                 checked_prices = []
-                while order.amount > total_valid_liquidity and len(self.sells_heap) > 0:
+                while order.amount - total_valid_liquidity >= self.min_lot_size and len(self.sells_heap) > 0:
                     best_price = self.sells_heap[0]
                     if order.price >= best_price:
                         total_valid_liquidity += self.asks[best_price].volume
@@ -119,7 +118,7 @@ class OrderBook:
                 for price in checked_prices:
                     heapq.heappush(self.sells_heap, price)
                 #If valid liquidity was not enough, return, else let the order enter the market normally
-                if order.amount > total_valid_liquidity:
+                if order.amount - total_valid_liquidity >= self.min_lot_size:
                     return trade_logs
             #Loop over the sells_heap best prices
             while order.active == True and len(self.sells_heap) > 0:
@@ -130,6 +129,10 @@ class OrderBook:
                     #Loop over the OrderQueue orders until the order is filled or the queue is emptied at this price
                     while order.active == True and len(best_orderq.queue) > 0:
                         maker_order = best_orderq.queue[0]
+                        #If the order was previously cancelled, evict it and continue
+                        if maker_order.active == False:
+                            best_orderq.evict_order()
+                            continue
                         trade_amount = min(order.amount, maker_order.amount)
                         order.reduce_amount(trade_amount)
                         if maker_order.amount - trade_amount < self.min_lot_size:
@@ -141,16 +144,18 @@ class OrderBook:
                         if trade_amount > 0:
                             trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_sell_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
-                    if len(best_orderq.queue) == 0:
+                    if best_orderq.volume < self.min_lot_size:
                         heapq.heappop(self.sells_heap)
                         best_orderq.heapq_exists = False
-                        #Floating-point dust sweeper
-                        best_orderq.volume = 0
+                        #Empty the queue
+                        best_orderq.empty_queue()
                 #Best available sell price is above the buy order's offer
                 else:
                     break
             #If the buy order still remains to be filled and its type is GTC, place it waiting in the book
             if order.active == True and order.order_type == 'GTC':
+                #Only track orders that stay in the book
+                self.order_tracker[order.id] = order
                 if order.price not in self.bids:
                     self.bids[order.price] = OrderQueue(order.price)
                     self.bids[order.price].ingest_order(order)
@@ -169,7 +174,7 @@ class OrderBook:
                 #Peek-and-restore approach using the heapq to determine whether the order can be filled instantly
                 total_valid_liquidity = 0
                 checked_prices = []
-                while order.amount > total_valid_liquidity and len(self.buys_heap) > 0:
+                while order.amount - total_valid_liquidity >= self.min_lot_size and len(self.buys_heap) > 0:
                     best_price = -self.buys_heap[0]
                     if order.price <= best_price:
                         total_valid_liquidity += self.bids[best_price].volume
@@ -182,7 +187,7 @@ class OrderBook:
                 for price in checked_prices:
                     heapq.heappush(self.buys_heap, -price)
                 #If valid liquidity was not enough, return, else let the order enter the market normally
-                if order.amount > total_valid_liquidity:
+                if order.amount - total_valid_liquidity >= self.min_lot_size:
                     return trade_logs
             #Loop over the buys_heap best prices
             while order.active == True and len(self.buys_heap) > 0:
@@ -193,6 +198,10 @@ class OrderBook:
                     #Loop over the OrderQueue orders until the order is filled or the queue is emptied at this price
                     while order.active == True and len(best_orderq.queue) > 0:
                         maker_order = best_orderq.queue[0]
+                        #If the order was previously cancelled, evict it and continue
+                        if maker_order.active == False:
+                            best_orderq.evict_order()
+                            continue
                         trade_amount = min(order.amount, maker_order.amount)
                         order.reduce_amount(trade_amount)
                         if maker_order.amount - trade_amount < self.min_lot_size:
@@ -204,16 +213,18 @@ class OrderBook:
                         if trade_amount > 0:
                             trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_buy_price, "volume": trade_amount})
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
-                    if len(best_orderq.queue) == 0:
+                    if best_orderq.volume < self.min_lot_size:
                         heapq.heappop(self.buys_heap)
                         best_orderq.heapq_exists = False
-                        #Floating-point dust sweeper
-                        best_orderq.volume = 0
+                        #Empty the queue
+                        best_orderq.empty_queue()
                 #Best available buy price is below the sell order's offer
                 else:
                     break
             #If the sell order still remains to be filled and its type is GTC, place it waiting in the book
             if order.active == True and order.order_type == 'GTC':
+                #Only track orders that stay in the book
+                self.order_tracker[order.id] = order
                 if order.price not in self.asks:
                     self.asks[order.price] = OrderQueue(order.price)
                     self.asks[order.price].ingest_order(order)
@@ -244,11 +255,18 @@ class OrderBook:
         if order.side == "buy":
             self.bids[order.price].volume -= amount
             if self.bids[order.price].volume < self.min_lot_size:
+                self.cancel_count += 1
                 self.bids[order.price].empty_queue()
         elif order.side == "sell":
             self.asks[order.price].volume -= amount
             if self.asks[order.price].volume < self.min_lot_size:
+                self.cancel_count += 1
                 self.asks[order.price].empty_queue()
+
+        #Run the garbage collector if cancel count exceeded the threshold
+        if self.cancel_count >= self.gc_threshold:
+            self.run_garbage_collector()
+        
         #print(f"The order with Id {orderId} was succesfully cancelled.")
         return {'success': True, 'cancelled_amount': amount, 'detail': "The order was succesfully cancelled."}
 
@@ -338,3 +356,37 @@ class OrderBook:
                     self.asks[best_ask].volume = 0
                 heapq.heappop(asks_ss)
         return market
+
+    #Garbage Collector Method
+    def run_garbage_collector(self):
+        #Pre-allocate hash lookups into local function variables to increase execution speed
+        bids = self.bids
+        asks = self.asks
+        min_lot = self.min_lot_size
+        clean_buys_heap = []
+        clean_sells_heap = []
+        clean_buys_app = clean_buys_heap.append
+        clean_sells_app = clean_sells_heap.append
+
+        #Clean the buys heap
+        for price in self.buys_heap:
+            bids_queue = bids[-price]
+            if bids_queue.volume >= min_lot:
+                clean_buys_app(price)
+            else:   
+                bids_queue.heapq_exists = False
+        #Clean the sells heap
+        for price in self.sells_heap:
+            sells_queue = asks[price]
+            if sells_queue.volume >= min_lot:
+                clean_sells_app(price)
+            else:
+                sells_queue.heapq_exists = False
+
+        #Heapify them and assign the variables to the global class scope
+        heapq.heapify(clean_buys_heap)
+        heapq.heapify(clean_sells_heap)
+        self.buys_heap = clean_buys_heap
+        self.sells_heap = clean_sells_heap
+        #Reset cancel count
+        self.cancel_count = 0
