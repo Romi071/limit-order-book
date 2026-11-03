@@ -142,7 +142,14 @@ class OrderBook:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
                         if trade_amount > 0:
-                            trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_sell_price, "volume": trade_amount})
+                            trade_logs.append({ "takerSide": order.side,
+                                                "takerId": order.id, 
+                                                "takerTag": order.client_tag,
+                                                "makerId": maker_order.id,
+                                                "makerTag": maker_order.client_tag,
+                                                "price": best_sell_price,
+                                                "amount": trade_amount
+                                                })
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume < self.min_lot_size:
                         heapq.heappop(self.sells_heap)
@@ -211,7 +218,14 @@ class OrderBook:
                             maker_order.reduce_amount(trade_amount)
                             best_orderq.volume -= trade_amount
                         if trade_amount > 0:
-                            trade_logs.append({"takerId": order.id, "makerId": maker_order.id, "price": best_buy_price, "volume": trade_amount})
+                            trade_logs.append({ "takerSide": order.side,
+                                                "takerId": order.id, 
+                                                "takerTag": order.client_tag,
+                                                "makerId": maker_order.id,
+                                                "makerTag": maker_order.client_tag,
+                                                "price": best_buy_price,
+                                                "amount": trade_amount
+                                                })
                     #If the OrderQueue entry at this price is fully filled, pop price from the heapq
                     if best_orderq.volume < self.min_lot_size:
                         heapq.heappop(self.buys_heap)

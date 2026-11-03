@@ -15,10 +15,13 @@ async def lifespan(app: fastapi.FastAPI):
     await app.state.db.execute("""
                     CREATE TABLE IF NOT EXISTS trades (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        makerId TEXT,
+                        takerSide TEXT,
                         takerId TEXT,
+                        takerTag TEXT,
+                        makerId TEXT,
+                        makerTag TEXT,
                         price REAL,
-                        volume REAL,
+                        amount REAL,
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                     ); """)
     await app.state.db.commit()
@@ -30,9 +33,15 @@ async def lifespan(app: fastapi.FastAPI):
     #If the server closed and logs were remaining in the buffer, commit them to the SQLite database to prevent state loss
     flusher_task.cancel()
     if len(logs_buffer) > 0:
-        logs_buffer_tuples = [(log["makerId"], log["takerId"], log["price"], log["volume"]) for log in logs_buffer]
+        logs_buffer_tuples = [( log["takerSide"], 
+                                log["takerId"], 
+                                log["takerTag"], 
+                                log["makerId"], 
+                                log["makerTag"], 
+                                log["price"], 
+                                log["amount"]) for log in logs_buffer]
         await app.state.db.executemany(
-            "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
+            "INSERT INTO trades (takerSide, takerId, takerTag, makerId, makerTag, price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", logs_buffer_tuples)
         await app.state.db.commit()
     #Close the .db file gracefully when the server stops running
     await app.state.db.close()
@@ -97,10 +106,16 @@ async def sql_flusher():
         await asyncio.sleep(0.1)
         #If there are any logs in the buffer, convert them to a tuple and insert them into db in C-speed
         if len(logs_buffer) > 0:
-            logs_buffer_tuples = [(log["makerId"], log["takerId"], log["price"], log["volume"]) for log in logs_buffer]
+            logs_buffer_tuples = [(log["takerSide"], 
+                                   log["takerId"], 
+                                   log["takerTag"], 
+                                   log["makerId"], 
+                                   log["makerTag"], 
+                                   log["price"], 
+                                   log["amount"]) for log in logs_buffer]
             logs_buffer.clear()
             await app.state.db.executemany(
-                "INSERT INTO trades (makerId, takerId, price, volume) VALUES (?, ?, ?, ?)", logs_buffer_tuples)
+                "INSERT INTO trades (takerSide, takerId, takerTag, makerId, makerTag, price, amount) VALUES (?, ?, ?, ?, ?, ?, ?)", logs_buffer_tuples)
             await app.state.db.commit()
 
 #POST order request backed up by pydantic's BaseModel and lock async handling
